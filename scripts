@@ -1,0 +1,177 @@
+<?php
+/**
+ * Arquivo de Diagnóstico para Agendamento
+ * Use este arquivo para verificar se tudo está configurado corretamente
+ * Acesse: http://localhost:8000/teste_agendamento.php
+ */
+
+require_once 'config/database.php';
+
+echo "<h1>Diagnóstico do Sistema de Agendamento</h1>";
+echo "<style>body{font-family:Arial;padding:20px;} .ok{color:green;} .erro{color:red;} .info{color:blue;}</style>";
+
+$conn = getConnection();
+
+// 1. Verificar conexão
+echo "<h2>1. Conexão com Banco de Dados</h2>";
+if ($conn) {
+    echo "<p class='ok'>✓ Conexão estabelecida com sucesso!</p>";
+} else {
+    echo "<p class='erro'>✗ Erro na conexão!</p>";
+    exit;
+}
+
+// 2. Verificar tabelas
+echo "<h2>2. Verificação de Tabelas</h2>";
+$tabelas = ['agendamentos', 'servicos', 'horarios_config', 'usuarios'];
+foreach ($tabelas as $tabela) {
+    $result = $conn->query("SHOW TABLES LIKE '$tabela'");
+    if ($result && $result->num_rows > 0) {
+        echo "<p class='ok'>✓ Tabela '$tabela' existe</p>";
+    } else {
+        echo "<p class='erro'>✗ Tabela '$tabela' NÃO existe! Execute o database.sql</p>";
+    }
+}
+
+// 3. Verificar serviços
+echo "<h2>3. Serviços Cadastrados</h2>";
+$query = "SELECT COUNT(*) as total FROM servicos WHERE ativo = 1";
+$result = $conn->query($query);
+$row = $result->fetch_assoc();
+$total_servicos = $row['total'];
+
+if ($total_servicos > 0) {
+    echo "<p class='ok'>✓ Há $total_servicos serviço(s) ativo(s)</p>";
+    $query = "SELECT id, nome FROM servicos WHERE ativo = 1";
+    $result = $conn->query($query);
+    while ($servico = $result->fetch_assoc()) {
+        echo "<p class='info'>- {$servico['nome']} (ID: {$servico['id']})</p>";
+    }
+} else {
+    echo "<p class='erro'>✗ Nenhum serviço ativo cadastrado! Cadastre serviços no painel admin.</p>";
+}
+
+// 4. Verificar horários configurados
+echo "<h2>4. Horários Configurados</h2>";
+$query = "SELECT dia_semana, hora_inicio, hora_fim, intervalo FROM horarios_config WHERE ativo = 1";
+$result = $conn->query($query);
+$dias_semana = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
+
+if ($result && $result->num_rows > 0) {
+    echo "<p class='ok'>✓ Horários configurados:</p>";
+    echo "<table border='1' cellpadding='5' style='border-collapse:collapse;'>";
+    echo "<tr><th>Dia</th><th>Início</th><th>Fim</th><th>Intervalo</th></tr>";
+    while ($row = $result->fetch_assoc()) {
+        echo "<tr>";
+        echo "<td>{$dias_semana[$row['dia_semana']]}</td>";
+        echo "<td>{$row['hora_inicio']}</td>";
+        echo "<td>{$row['hora_fim']}</td>";
+        echo "<td>{$row['intervalo']} min</td>";
+        echo "</tr>";
+    }
+    echo "</table>";
+} else {
+    echo "<p class='erro'>✗ Nenhum horário configurado!</p>";
+    echo "<p class='info'>→ Acesse o painel admin (admin/agenda.php) e configure os horários de atendimento.</p>";
+}
+
+// 5. Verificar agendamentos existentes
+echo "<h2>5. Agendamentos Existentes</h2>";
+$query = "SELECT COUNT(*) as total FROM agendamentos WHERE status NOT IN ('cancelado')";
+$result = $conn->query($query);
+$row = $result->fetch_assoc();
+$total_agendamentos = $row['total'];
+
+echo "<p class='info'>Total de agendamentos ativos: $total_agendamentos</p>";
+
+if ($total_agendamentos > 0) {
+    $query = "SELECT data, TIME_FORMAT(horario, '%H:%i') as horario FROM agendamentos 
+              WHERE data >= CURDATE() AND status NOT IN ('cancelado') 
+              ORDER BY data, horario LIMIT 10";
+    $result = $conn->query($query);
+    if ($result && $result->num_rows > 0) {
+        echo "<p>Próximos agendamentos:</p>";
+        echo "<ul>";
+        while ($row = $result->fetch_assoc()) {
+            echo "<li>{$row['data']} às {$row['horario']}</li>";
+        }
+        echo "</ul>";
+    }
+}
+
+// 6. Teste de inserção (simulado)
+echo "<h2>6. Teste de Dados para JavaScript</h2>";
+$query_ocupados = "SELECT data, TIME_FORMAT(horario, '%H:%i') as horario FROM agendamentos 
+                   WHERE data >= CURDATE() AND data <= DATE_ADD(CURDATE(), INTERVAL 30 DAY) 
+                   AND status NOT IN ('cancelado')
+                   ORDER BY data, horario";
+$result_ocupados = $conn->query($query_ocupados);
+$horarios_ocupados = [];
+if ($result_ocupados) {
+    while ($row = $result_ocupados->fetch_assoc()) {
+        $data_formatada = $row['data'];
+        if (!isset($horarios_ocupados[$data_formatada])) {
+            $horarios_ocupados[$data_formatada] = [];
+        }
+        $horarios_ocupados[$data_formatada][] = $row['horario'];
+    }
+}
+
+$query_config = "SELECT dia_semana, TIME_FORMAT(hora_inicio, '%H:%i') as hora_inicio, 
+                 TIME_FORMAT(hora_fim, '%H:%i') as hora_fim, intervalo 
+                 FROM horarios_config WHERE ativo = 1";
+$result_config = $conn->query($query_config);
+$horarios_config = [];
+if ($result_config) {
+    while ($row = $result_config->fetch_assoc()) {
+        $horarios_config[$row['dia_semana']] = $row;
+    }
+}
+
+echo "<p class='info'>Horários ocupados (JSON):</p>";
+echo "<pre>" . print_r($horarios_ocupados, true) . "</pre>";
+
+echo "<p class='info'>Configuração de horários (JSON):</p>";
+echo "<pre>" . print_r($horarios_config, true) . "</pre>";
+
+// 7. Resumo
+echo "<h2>7. Resumo</h2>";
+$problemas = [];
+
+if ($total_servicos == 0) {
+    $problemas[] = "Nenhum serviço cadastrado";
+}
+
+if (empty($horarios_config)) {
+    $problemas[] = "Nenhum horário configurado";
+}
+
+if (empty($problemas)) {
+    echo "<p class='ok'><strong>✓ Tudo parece estar configurado corretamente!</strong></p>";
+    echo "<p>Se ainda há problemas no agendamento:</p>";
+    echo "<ul>";
+    echo "<li>Verifique o console do navegador (F12) para erros JavaScript</li>";
+    echo "<li>Verifique se os arquivos JavaScript estão carregando</li>";
+    echo "<li>Tente fazer um agendamento e veja a mensagem de erro</li>";
+    echo "</ul>";
+} else {
+    echo "<p class='erro'><strong>⚠ Problemas encontrados:</strong></p>";
+    echo "<ul>";
+    foreach ($problemas as $problema) {
+        echo "<li class='erro'>$problema</li>";
+    }
+    echo "</ul>";
+    echo "<p><strong>Soluções:</strong></p>";
+    echo "<ul>";
+    if ($total_servicos == 0) {
+        echo "<li>Acesse <a href='admin/login.php'>admin/login.php</a> e cadastre serviços</li>";
+    }
+    if (empty($horarios_config)) {
+        echo "<li>Acesse <a href='admin/agenda.php'>admin/agenda.php</a> e configure os horários</li>";
+    }
+    echo "</ul>";
+}
+
+$conn->close();
+?>
+
